@@ -12,6 +12,7 @@
 
 # data files
 images/
+labels/
 IRL_Testing_Videos/
 annotations/
 K-Fold_Results.csv
