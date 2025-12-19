@@ -1,7 +1,7 @@
-path: C:/Users/brand/Documents/College/2025/MARTIN/SYBIL/
-train: splits/train_fold-3.txt
-val: splits/val_fold-3.txt
-test: splits/test.txt
+path: C:\Users\brand\Documents\College\2025\MARTIN\SYBIL
+train: C:\Users\brand\Documents\College\2025\MARTIN\SYBIL\splits\train_fold-3.txt
+val: C:\Users\brand\Documents\College\2025\MARTIN\SYBIL\splits\val_fold-3.txt
+test: C:\Users\brand\Documents\College\2025\MARTIN\SYBIL\splits\test.txt
 
 nc: 1
 names: ['litter']

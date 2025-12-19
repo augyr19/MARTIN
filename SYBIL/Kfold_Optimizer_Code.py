@@ -3,11 +3,15 @@ from ultralytics import YOLO
 import os
 import psutil
 import csv
+from pathlib import Path
+
+
 
 # Settings
 YOLO_optimized_batch_size = 0.75  # Adjust based on GPU memory
 modelsize = "yolov8n"   # change this when testing different model sizes
-base_path = r"C:\Users\brand\Documents\College\2025\MARTIN\SYBIL\yamls"
+ROOT = Path.cwd() # Assumes they opened the SYBIL folder
+base_path = ROOT / "yamls"
 folds = [1, 2, 3, 4, 5]
 csv_file = "K-Fold_Results.csv"
 
@@ -68,7 +72,7 @@ def main():
             optimizer="AdamW",
             device=0,
             project="runs/Kfolds",
-            name=f"fold{fold_id}_best",
+            name=f"{modelsize}_fold{fold_id}_best",
             patience=10,
             conf=0.001,
             fraction=1.0,

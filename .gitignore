@@ -1,14 +1,21 @@
-# Personal Files
-*.vscode/
-*__pycache__/
-*venv/
-*.venv/
+# --- Python Essentials ---
+__pycache__/
+venv/
+.venv/
+env/
+.vscode/
+dist/
+build/
+
+# Ignoring Specific File Types
 *.pyc
 *.env
 *.log
 *.tmp
 *.cache
 *.mp4
+*.zip
+*.py[cod]
 
 # data files
 images/
