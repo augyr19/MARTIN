@@ -1,0 +1,26 @@
+# Personal Files
+*.vscode/
+*__pycache__/
+*venv/
+*.venv/
+*.pyc
+*.env
+*.log
+*.tmp
+*.cache
+*.mp4
+
+# data files
+images/
+IRL_Testing_Videos/
+annotations/
+K-Fold_Results.csv
+
+
+# Extra models
+*runs/
+*.pt
+
+# Legacy code
+NOT_USEFUL_CODE/
+
