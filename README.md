@@ -22,12 +22,23 @@ It integrates **SYBIL** (Single-class YOLO Based Identifier of Litter), a comput
 git clone https://github.com/<your-username>/MARTIN.git
 ```
 
-### Set up SYBIL environment:
+## Set up MARTIN environment (recommended):
+```bash
+cd PATH/TO/MARTIN
+conda create -n MARTIN_env python=3.10.12
+conda activate MARTIN_env
+
+pip install torch==2.5.1+cu118 torchvision==0.20.1+cu118 torchaudio==2.5.1+cu118 --index-url https://download.pytorch.org/whl/cu118 --no-deps
+
+pip install -r requirements.txt
+```
+
+### Set up SYBIL environment (for SYBIL only):
 
 See ```SYBIL/flow.md```
 
 
-### Set up ROS environment:
+### Set up ROS environment (for ROS only):
 ```bash
 cd PATH/TO/MARTIN/ROS
 conda create -n ROS_env python=3.10.12

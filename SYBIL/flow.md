@@ -24,7 +24,7 @@ SYBIL/
 # 📄 Code Execution Flow
 This section will explain what each script does, what needs to be changed, and in which order they need to be run.
 
-> [IMPORTANT] Before running any scripts, ensure your current working directory is set to the ```SYBIL``` folder. Open the ```SYBIL``` folder in your IDE before executing the code to ensure paths resolve correctly.
+> [IMPORTANT] Before running any scripts, ensure your current working directory is set to the ```SYBIL``` folder.
 
 ## 1.0 SYBIL Environment
 
