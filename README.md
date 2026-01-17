@@ -19,7 +19,7 @@ It integrates **SYBIL** (Single-class YOLO Based Identifier of Litter), a comput
 ### Clone the repository:
 
 ```bash
-git clone https://github.com/<your-username>/MARTIN.git
+git clone https://github.com/augyr19/MARTIN.git
 ```
 
 ## Set up MARTIN environment (recommended):
