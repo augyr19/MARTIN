@@ -25,9 +25,14 @@ annotations/
 K-Fold_Results.csv
 
 
-# Extra models
+# models
 *runs/
 *.pt
+
+# Ignore ROS2 build artifacts
+build/
+install/
+log/
 
 # Legacy code
 NOT_USEFUL_CODE/
@@ -35,4 +40,7 @@ NOT_USEFUL_CODE/
 # Not ready for production
 DRONE/
 EDGE/
+
+
+
 

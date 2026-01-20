@@ -1,3 +1,10 @@
+'''
+WARNING:
+
+This code is outdated, considering there is already a pre-built RealSense function that does a lot of this math.
+'''
+
+
 import numpy as np
 import pyrealsense2 as rs
 
