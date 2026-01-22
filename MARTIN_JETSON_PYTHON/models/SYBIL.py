@@ -17,7 +17,6 @@ class SybilModel:
         weights_path : str
             Path to the trained YOLOv8 model weights (.pt or .onnx).
 
-        Why it's useful:
         ----------------
         - Keeps model loading encapsulated and reusable.
         - Allows easy swapping of model weights without changing inference logic.
@@ -44,7 +43,6 @@ class SybilModel:
         results : list
             A list of detection results from the YOLO model.
 
-        Why it's useful:
         ----------------
         - Abstracts away YOLO's internal API so nodes only need to call `infer()`.
         - Allows confidence threshold tuning per deployment scenario.

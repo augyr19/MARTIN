@@ -4,9 +4,9 @@ from geometry_msgs.msg import Point
 
 import numpy as np
 
-from martin_jetson_package.sensors.RealSense import RealSenseCamera
-from martin_jetson_package.models.SYBIL import SybilModel
-from martin_jetson_package.utils.depth_ops import (
+from MARTIN_Jetson_Package.sensors.RealSense import RealSenseCamera
+from MARTIN_Jetson_Package.models.SYBIL import SybilModel
+from MARTIN_Jetson_Package.utils.depth_ops import (
     bbox_to_xyz,
     bbox_real_world_size
 )

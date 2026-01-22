@@ -14,8 +14,6 @@ class RealSenseCamera:
     def __init__(self, warmup_frames: int = 10):
         """
         Initializes the RealSense pipeline and prepares the camera.
-
-        Why this is useful:
         -------------------
         - Encapsulates all RealSense SDK setup in one place.
         - Ensures RGB and depth frames are aligned pixel-to-pixel.
@@ -63,7 +61,6 @@ class RealSenseCamera:
         depth : np.ndarray
             640x480 depth map (in raw depth units).
 
-        Why this is useful:
         -------------------
         - Provides synchronized, aligned frames for inference.
         - Keeps RealSense-specific logic out of your CV nodes.
