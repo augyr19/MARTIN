@@ -25,7 +25,7 @@ class RealSenseCamera:
         apply_spatial_filter: bool = True,
         apply_temporal_filter: bool = True,
         apply_hole_filling: bool = True,
-        holes_fill_mode: int = 3
+        holes_fill_mode: int = 2
     ):
         """
         Initializes the RealSense pipeline with post-processing filters.
@@ -42,7 +42,7 @@ class RealSenseCamera:
             Enable hole filling to interpolate missing depth pixels (default is True).
         holes_fill_mode : int, optional
             Hole filling mode: 0=disabled, 1=fill from left, 2=fill nearest, 3=fill farthest
-            (default is 3, fills with farthest neighbor).
+            (default is 2).
 
         Raises
         ------
@@ -83,40 +83,45 @@ class RealSenseCamera:
             color_profile = color_stream.as_video_stream_profile()
             self.intrinsics = color_profile.get_intrinsics()
 
-            # Initialize post-processing filters
+            # # Initialize post-processing filters
             self.apply_spatial_filter = apply_spatial_filter
             self.apply_temporal_filter = apply_temporal_filter
             self.apply_hole_filling = apply_hole_filling
+            
+            #debugging purposes
+            self.spatial_filter = None
+            self.temporal_filter = None
+            self.hole_filling_filter = None
+            # commented out for node debugging
+            # if self.apply_spatial_filter:
+            #     self.spatial_filter = rs.spatial_filter()
+            #     # Configure spatial filter
+            #     # Default options are usually good, but you can tune these:
+            #     # - Magnitude: Strength of the filter (1-5, default 2)
+            #     # - Smooth alpha: Blending factor (0.25-1, default 0.5)
+            #     # - Smooth delta: Max distance to blend (1-50, default 20)
+            #     self.spatial_filter.set_option(rs.option.holes_fill, 2)
+            #     self.get_logger = lambda: self  # Placeholder for logging
+            # else:
+            #     self.spatial_filter = None
 
-            if self.apply_spatial_filter:
-                self.spatial_filter = rs.spatial_filter()
-                # Configure spatial filter
-                # Default options are usually good, but you can tune these:
-                # - Magnitude: Strength of the filter (1-5, default 2)
-                # - Smooth alpha: Blending factor (0.25-1, default 0.5)
-                # - Smooth delta: Max distance to blend (1-50, default 20)
-                self.spatial_filter.set_option(rs.option.holes_fill, 3)
-                self.get_logger = lambda: self  # Placeholder for logging
-            else:
-                self.spatial_filter = None
+            # if self.apply_temporal_filter:
+            #     self.temporal_filter = rs.temporal_filter()
+            #     # Configure temporal filter
+            #     # - Smooth alpha: Blending factor (0-1, default 0.4)
+            #     # - Smooth delta: Max difference to blend (1-100, default 20)
+            #     # Default settings work well for most use cases
+            # else:
+            #     self.temporal_filter = None
 
-            if self.apply_temporal_filter:
-                self.temporal_filter = rs.temporal_filter()
-                # Configure temporal filter
-                # - Smooth alpha: Blending factor (0-1, default 0.4)
-                # - Smooth delta: Max difference to blend (1-100, default 20)
-                # Default settings work well for most use cases
-            else:
-                self.temporal_filter = None
-
-            if self.apply_hole_filling:
-                self.hole_filling_filter = rs.hole_filling_filter(holes_fill_mode)
-                # holes_fill_mode options:
-                # 0: FILL_FROM_LEFT - Fill holes from left edge
-                # 1: FARTHEST_FROM_AROUND - Fill with farthest valid neighbor
-                # 2: NEAREST_FROM_AROUND - Fill with nearest valid neighbor
-            else:
-                self.hole_filling_filter = None
+            # if self.apply_hole_filling:
+            #     self.hole_filling_filter = rs.hole_filling_filter(holes_fill_mode)
+            #     # holes_fill_mode options:
+            #     # 0: FILL_FROM_LEFT - Fill holes from left edge
+            #     # 1: FARTHEST_FROM_AROUND - Fill with farthest valid neighbor
+            #     # 2: NEAREST_FROM_AROUND - Fill with nearest valid neighbor
+            # else:
+            #     self.hole_filling_filter = None
 
             # Warm-up frames to stabilize camera exposure and depth
             for _ in range(warmup_frames):
@@ -160,20 +165,21 @@ class RealSenseCamera:
 
             # Apply post-processing filters to depth
             # Filters are applied in order: spatial → temporal → hole filling
-            if self.apply_spatial_filter and self.spatial_filter is not None:
-                depth_frame_filtered = rs.frame()
-                depth_frame_filtered = self.spatial_filter.process(depth_frame)
-                depth = np.asanyarray(depth_frame_filtered.get_data())
+            # commented out for node debugging
+            # if self.apply_spatial_filter and self.spatial_filter is not None:
+            #     depth_frame_filtered = rs.frame()
+            #     depth_frame_filtered = self.spatial_filter.process(depth_frame)
+            #     depth = np.asanyarray(depth_frame_filtered.get_data())
 
-            if self.apply_temporal_filter and self.temporal_filter is not None:
-                depth_frame_filtered = rs.frame()
-                depth_frame_filtered = self.temporal_filter.process(depth_frame)
-                depth = np.asanyarray(depth_frame_filtered.get_data())
+            # if self.apply_temporal_filter and self.temporal_filter is not None:
+            #     depth_frame_filtered = rs.frame()
+            #     depth_frame_filtered = self.temporal_filter.process(depth_frame)
+            #     depth = np.asanyarray(depth_frame_filtered.get_data())
 
-            if self.apply_hole_filling and self.hole_filling_filter is not None:
-                depth_frame_filtered = rs.frame()
-                depth_frame_filtered = self.hole_filling_filter.process(depth_frame)
-                depth = np.asanyarray(depth_frame_filtered.get_data())
+            # if self.apply_hole_filling and self.hole_filling_filter is not None:
+            #     depth_frame_filtered = rs.frame()
+            #     depth_frame_filtered = self.hole_filling_filter.process(depth_frame)
+            #     depth = np.asanyarray(depth_frame_filtered.get_data())
 
             return rgb, depth
 

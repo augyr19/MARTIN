@@ -1,26 +1,22 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Point
+from sensor_msgs.msg import Image, CameraInfo
+from cv_bridge import CvBridge
 
 import numpy as np
 import cv2
 
-from MARTIN_Jetson_Package.sensors.RealSense import RealSenseCamera
-from MARTIN_Jetson_Package.utils.depth_ops import (
-    bbox_to_xyz,
-)
-
-from pupil_apriltags import Detector  # pip install pupil-apriltags
+from MARTIN_Jetson_Package.utils.depth_ops import bbox_to_xyz
+from pupil_apriltags import Detector
 
 
 class AprilTagModel:
-    """
-    Wrapper class for AprilTag detection using pupil_apriltags.
-    """
+    """Wrapper class for AprilTag detection using pupil_apriltags."""
 
     def __init__(
         self,
-        tag_family: str = "tag36h11",
+        tag_family: str = "tag25h9",
         quad_decimate: float = 1.0,
         quad_sigma: float = 0.0,
         refine_edges: bool = True,
@@ -33,28 +29,21 @@ class AprilTagModel:
             refine_edges=refine_edges,
             decode_sharpening=0.25,
             debug=False,
-        )  # [web:12]
+        )
 
     def infer(self, frame: np.ndarray):
-        """
-        Detect AprilTags in an RGB/BGR frame.
-
-        Returns a list of dicts:
-        - id: tag id
-        - center: (u, v) pixel coordinates
-        - corners: list of 4 (u, v) pixel coordinates (counter‑clockwise)
-        """
+        """Detect AprilTags in an RGB/BGR frame."""
         if frame.ndim == 3:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         else:
             gray = frame
 
-        detections_raw = self.detector.detect(gray)  # [web:12]
+        detections_raw = self.detector.detect(gray)
 
         detections = []
         for det in detections_raw:
-            center = tuple(det.center.tolist())        # (u, v) [web:12][web:16]
-            corners = [tuple(c) for c in det.corners.tolist()]  # 4x (u, v) [web:12][web:16]
+            center = tuple(det.center.tolist())
+            corners = [tuple(c) for c in det.corners.tolist()]
 
             detections.append(
                 {
@@ -70,70 +59,22 @@ class AprilTagModel:
 class AprilTagNode(Node):
     """
     ROS 2 node for detecting AprilTags on RealSense camera input.
+    Subscribes to /camera/color/image_raw and /camera/aligned_depth_to_color/image_raw.
 
     Topics Published
     ----------------
     - /apriltag/pixel_center : geometry_msgs/Point (u, v, 0) pixel coordinates
-    - /apriltag/3d_position : geometry_msgs/Point (X, Y, Z) in meters (optional)
+    - /apriltag/three_d_position : geometry_msgs/Point (X, Y, Z) in meters
     """
 
     def __init__(self):
         super().__init__("apriltag_node")
 
         # Parameters
-        self.declare_parameter("inference_rate", 30)  # Hz
-        self.declare_parameter("tag_family", "tag36h11")
-
-        # RealSense filter parameters (mirror SYBIL node)
-        self.declare_parameter("enable_spatial_filter", True)
-        self.declare_parameter("enable_temporal_filter", True)
-        self.declare_parameter("enable_hole_filling", True)
-        self.declare_parameter("hole_filling_mode", 3)
-
-        self.inference_rate = self.get_parameter("inference_rate").value
+        self.declare_parameter("tag_family", "tag25h9")
         tag_family = self.get_parameter("tag_family").value
 
-        # RealSense filter settings
-        enable_spatial = self.get_parameter("enable_spatial_filter").value
-        enable_temporal = self.get_parameter("enable_temporal_filter").value
-        enable_hole_fill = self.get_parameter("enable_hole_filling").value
-        hole_fill_mode = self.get_parameter("hole_filling_mode").value
-
-        # Publishers
-        self.pixel_center_pub = self.create_publisher(
-            Point,
-            "/apriltag/pixel_center",
-            10,
-        )
-        self.position_pub = self.create_publisher(
-            Point,
-            "/apriltag/3d_position",
-            10,
-        )
-
-        # Initialize RealSense
-        try:
-            self.camera = RealSenseCamera(
-                warmup_frames=10,
-                apply_spatial_filter=enable_spatial,
-                apply_temporal_filter=enable_temporal,
-                apply_hole_filling=enable_hole_fill,
-                holes_fill_mode=hole_fill_mode,
-            )
-            self.get_logger().info("RealSense camera initialized successfully")
-
-            filter_status = self.camera.get_filter_status()
-            self.get_logger().info(
-                f"RealSense filters: "
-                f"Spatial={filter_status['spatial_filter']}, "
-                f"Temporal={filter_status['temporal_filter']}, "
-                f"HoleFilling={filter_status['hole_filling']}"
-            )
-        except Exception as e:
-            self.get_logger().error(f"Failed to initialize RealSense: {e}")
-            raise
-
-        # Initialize AprilTag model
+        # Initialize AprilTag detector
         try:
             self.apriltag_model = AprilTagModel(tag_family=tag_family)
             self.get_logger().info(f"AprilTag detector initialized with family {tag_family}")
@@ -141,30 +82,78 @@ class AprilTagNode(Node):
             self.get_logger().error(f"Failed to initialize AprilTag detector: {e}")
             raise
 
-        # Camera intrinsics and depth scale (same helpers you use for SYBIL)
-        self.intrinsics = self.camera.get_intrinsics()   # fx, fy, cx, cy, etc. [web:20][web:25]
-        self.depth_scale = self.camera.get_depth_scale()
+        # Publishers
+        self.pixel_center_pub = self.create_publisher(Point, "/apriltag/pixel_center", 10)
+        self.position_pub = self.create_publisher(Point, "/apriltag/three_d_position", 10)
 
-        # Timer
-        timer_period = 1.0 / self.inference_rate
-        self.timer = self.create_timer(timer_period, self.inference_callback)
+        # Subscribers
+        self.bridge = CvBridge()
+        self.rgb = None
+        self.depth = None
+        self.intrinsics = None
+        self.depth_scale = 0.001  # Default RealSense scale (1mm per unit)
 
-        self.get_logger().info(
-            f"AprilTag node started. Publishing at {self.inference_rate} Hz"
+        self.rgb_sub = self.create_subscription(
+            Image,
+            "/camera/color/image_raw",
+            self.rgb_callback,
+            10,
         )
 
-    def inference_callback(self):
-        """
-        Capture frames, run AprilTag detection, and publish results.
-        """
+        self.depth_sub = self.create_subscription(
+            Image,
+            "/camera/aligned_depth_to_color/image_raw",
+            self.depth_callback,
+            10,
+        )
+
+        self.camera_info_sub = self.create_subscription(
+            CameraInfo,
+            "/camera/color/camera_info",
+            self.camera_info_callback,
+            10,
+        )
+
+        # Timer for inference (30 Hz by default)
+        self.timer = self.create_timer(1.0 / 30.0, self.inference_callback)
+
+        self.get_logger().info("AprilTag node started. Subscribing to camera topics.")
+
+    def rgb_callback(self, msg: Image):
+        """Store latest RGB frame."""
         try:
-            rgb, depth = self.camera.get_frames()
+            self.rgb = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+        except Exception as e:
+            self.get_logger().warn(f"Failed to convert RGB message: {e}")
 
-            if rgb is None or depth is None:
-                self.get_logger().warn("Failed to retrieve frames from camera")
-                return
+    def depth_callback(self, msg: Image):
+        """Store latest depth frame."""
+        try:
+            self.depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+        except Exception as e:
+            self.get_logger().warn(f"Failed to convert depth message: {e}")
 
-            detections = self.apriltag_model.infer(rgb)
+    def camera_info_callback(self, msg: CameraInfo):
+        """Extract intrinsics from camera info (call once)."""
+        if self.intrinsics is None:
+            # Store intrinsics as a simple dict matching rs.intrinsics structure
+            # msg.k is a tuple/list: [fx, 0, cx, 0, fy, cy, 0, 0, 1]
+            K = msg.k
+            self.intrinsics = {
+                'fx': K[0],
+                'fy': K[4],
+                'ppx': K[2],
+                'ppy': K[5],
+            }
+            self.get_logger().info(f"Camera intrinsics received: fx={self.intrinsics['fx']}, fy={self.intrinsics['fy']}")
+
+    def inference_callback(self):
+        """Run AprilTag detection on latest frames."""
+        if self.rgb is None or self.depth is None or self.intrinsics is None:
+            return
+
+        try:
+            detections = self.apriltag_model.infer(self.rgb)
 
             if not detections:
                 return
@@ -172,23 +161,21 @@ class AprilTagNode(Node):
             for i, det in enumerate(detections):
                 tag_id = det["id"]
                 center_u, center_v = det["center"]
-                corners = det["corners"]  # [(u,v), ... 4]
+                corners = det["corners"]
 
-                # Log detection
                 self.get_logger().info(
                     f"AprilTag detection {i}: id={tag_id}, "
                     f"center pixel=({center_u:.1f}, {center_v:.1f})"
                 )
 
-                # Publish pixel center as Point (u, v, 0)
+                # Publish pixel center
                 pixel_msg = Point()
                 pixel_msg.x = float(center_u)
                 pixel_msg.y = float(center_v)
                 pixel_msg.z = 0.0
                 self.pixel_center_pub.publish(pixel_msg)
 
-                # OPTIONAL: approximate 3D position from tag center using your bbox_to_xyz
-                # Build a minimal bbox around the corners (xywh in pixel space)
+                # Compute 3D position from depth
                 u_coords = [c[0] for c in corners]
                 v_coords = [c[1] for c in corners]
                 x_min, x_max = min(u_coords), max(u_coords)
@@ -198,28 +185,35 @@ class AprilTagNode(Node):
 
                 bbox_xywh = np.array([center_u, center_v, w, h], dtype=np.float32)
 
-                xyz = bbox_to_xyz(
-                    bbox_xywh, depth, self.intrinsics, self.depth_scale
-                )
+                # Simple depth lookup at center
+                depth_at_center = self.get_depth_at_pixel(int(center_u), int(center_v))
+                if depth_at_center is not None:
+                    # Convert pixel + depth to 3D using intrinsics
+                    X = (center_u - self.intrinsics['ppx']) * depth_at_center / self.intrinsics['fx']
+                    Y = (center_v - self.intrinsics['ppy']) * depth_at_center / self.intrinsics['fy']
+                    Z = depth_at_center
 
-                if xyz is not None:
                     pos_msg = Point()
-                    pos_msg.x = float(xyz[0])
-                    pos_msg.y = float(xyz[1])
-                    pos_msg.z = float(xyz[2])
+                    pos_msg.x = float(X)
+                    pos_msg.y = float(Y)
+                    pos_msg.z = float(Z)
                     self.position_pub.publish(pos_msg)
 
         except Exception as e:
             self.get_logger().error(f"Error in AprilTag inference callback: {e}")
 
-    def destroy_node(self):
-        self.get_logger().info("Shutting down AprilTag node...")
-        try:
-            self.camera.stop()
-            self.get_logger().info("RealSense camera stopped")
-        except Exception as e:
-            self.get_logger().error(f"Error stopping camera: {e}")
-        super().destroy_node()
+    def get_depth_at_pixel(self, x: int, y: int) -> float:
+        """Get depth in meters at pixel (x, y)."""
+        if self.depth is None:
+            return None
+        if x < 0 or y < 0 or y >= self.depth.shape[0] or x >= self.depth.shape[1]:
+            return None
+
+        depth_raw = self.depth[y, x]
+        if depth_raw == 0:
+            return None
+
+        return float(depth_raw * self.depth_scale)
 
 
 def main(args=None):

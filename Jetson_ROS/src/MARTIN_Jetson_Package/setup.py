@@ -65,6 +65,7 @@ setup(
     python_requires='>=3.8',
     entry_points={
         'console_scripts': [
+            'april_tag_node = MARTIN_Jetson_Package.scripts.AprilTag_node:main',
             'sybil_node = MARTIN_Jetson_Package.scripts.SYBIL_node:main',
             'camera_node = MARTIN_Jetson_Package.scripts.camera_node:main',
         ],

@@ -1,32 +1,33 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Point
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CameraInfo
 from cv_bridge import CvBridge
+
 
 import cv2
 import numpy as np
-import pyrealsense2 as rs
 from collections import deque
 import threading
 
-from martin_jetson_package.sensors.RealSense import RealSenseCamera
 
 
 class CameraNode(Node):
     """
-    ROS 2 node for visualizing SYBIL detections on the camera feed.
+    ROS 2 node for visualizing SYBIL and AprilTag detections on the camera feed.
     
     Subscribes to:
-    - /sybil/3d_position : Detection 3D coordinates
-    - /sybil/object_size : Detection real-world dimensions
+    - /camera/color/image_raw : Live RGB frames from RealSense
+    - /camera/aligned_depth_to_color/image_raw : Aligned depth frames
+    - /camera/color/camera_info : Camera intrinsics
+    - /sybil/three_d_position : SYBIL detection 3D coordinates
+    - /sybil/object_size : SYBIL detection real-world dimensions
+    - /apriltag/three_d_position : AprilTag detection 3D coordinates
     
     Publishes:
     - /sybil/annotated_frame : Annotated frame with detection markers
-    
-    This node integrates RealSense directly to capture frames and project
-    3D detection coordinates back onto the 2D image plane for visualization.
     """
+
 
     def __init__(self):
         """Initialize the camera visualization node."""
@@ -38,12 +39,6 @@ class CameraNode(Node):
         self.declare_parameter('marker_size', 10)  # Circle radius in pixels
         self.declare_parameter('marker_color', [0, 255, 0])  # BGR: Green
         
-        # RealSense filter parameters (same as SYBIL_node)
-        self.declare_parameter('enable_spatial_filter', True)
-        self.declare_parameter('enable_temporal_filter', True)
-        self.declare_parameter('enable_hole_filling', True)
-        self.declare_parameter('hole_filling_mode', 3)
-        
         # Get visualization parameters
         self.display_window = self.get_parameter('display_window').value
         viz_rate = self.get_parameter('visualization_rate').value
@@ -51,48 +46,47 @@ class CameraNode(Node):
         marker_color = self.get_parameter('marker_color').value
         self.marker_color = tuple(marker_color)
         
-        # Get RealSense filter settings
-        enable_spatial = self.get_parameter('enable_spatial_filter').value
-        enable_temporal = self.get_parameter('enable_temporal_filter').value
-        enable_hole_fill = self.get_parameter('enable_hole_filling').value
-        hole_fill_mode = self.get_parameter('hole_filling_mode').value
-        
         # CV Bridge for image conversion
         self.bridge = CvBridge()
         
-        # Initialize RealSense camera with filter parameters
-        try:
-            self.camera = RealSenseCamera(
-                warmup_frames=10,
-                apply_spatial_filter=enable_spatial,
-                apply_temporal_filter=enable_temporal,
-                apply_hole_filling=enable_hole_fill,
-                holes_fill_mode=hole_fill_mode
-            )
-            self.intrinsics = self.camera.get_intrinsics()
-            self.depth_scale = self.camera.get_depth_scale()
-            self.get_logger().info("RealSense camera initialized successfully")
-            
-            # Log filter status
-            filter_status = self.camera.get_filter_status()
-            self.get_logger().info(
-                f"RealSense filters: Spatial={filter_status['spatial_filter']}, "
-                f"Temporal={filter_status['temporal_filter']}, "
-                f"HoleFilling={filter_status['hole_filling']}"
-            )
-        except Exception as e:
-            self.get_logger().error(f"Failed to initialize RealSense: {e}")
-            raise
+        # Storage for camera data (thread-safe)
+        self.data_lock = threading.Lock()
+        self.rgb = None
+        self.depth = None
+        self.intrinsics = None
+        self.depth_scale = 0.001  # Default RealSense scale (1mm per unit)
         
-        # Storage for latest detection data (thread-safe)
-        self.detection_lock = threading.Lock()
+        # Storage for detection data
         self.latest_positions = deque(maxlen=50)  # Keep last 50 detections
         self.latest_sizes = deque(maxlen=50)
+        self.apriltag_positions = deque(maxlen=50)
         
-        # Subscribers for detection data
+        # Subscribers for camera data
+        self.rgb_sub = self.create_subscription(
+            Image,
+            '/camera/color/image_raw',
+            self.rgb_callback,
+            10
+        )
+        
+        self.depth_sub = self.create_subscription(
+            Image,
+            '/camera/aligned_depth_to_color/image_raw',
+            self.depth_callback,
+            10
+        )
+        
+        self.camera_info_sub = self.create_subscription(
+            CameraInfo,
+            '/camera/color/camera_info',
+            self.camera_info_callback,
+            10
+        )
+        
+        # Subscribers for SYBIL detection data
         self.pos_sub = self.create_subscription(
             Point,
-            '/sybil/3d_position',
+            '/sybil/three_d_position',
             self.position_callback,
             10
         )
@@ -104,6 +98,14 @@ class CameraNode(Node):
             10
         )
         
+        # Subscriber for AprilTag detection data
+        self.apriltag_pos_sub = self.create_subscription(
+            Point,
+            '/apriltag/three_d_position',
+            self.apriltag_position_callback,
+            10
+        )
+        
         # Publisher for annotated frame
         self.annotated_pub = self.create_publisher(
             Image,
@@ -111,7 +113,7 @@ class CameraNode(Node):
             10
         )
         
-        # Timer for visualization (runs at fixed rate)
+        # Timer for visualization
         timer_period = 1.0 / viz_rate
         self.viz_timer = self.create_timer(timer_period, self.visualization_callback)
         
@@ -119,82 +121,126 @@ class CameraNode(Node):
             f"Camera visualization node started. Publishing at {viz_rate} Hz"
         )
 
+
+    def apriltag_position_callback(self, msg: Point):
+        """Store AprilTag 3D positions."""
+        with self.data_lock:
+            self.apriltag_positions.append({
+                'x': msg.x,
+                'y': msg.y,
+                'z': msg.z
+            })
+            self.get_logger().debug(
+                f"[AprilTag] Received 3D position: ({msg.x:.2f}, {msg.y:.2f}, {msg.z:.2f})"
+            )
+
+
+    def rgb_callback(self, msg: Image):
+        """Store latest RGB frame."""
+        try:
+            with self.data_lock:
+                self.rgb = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        except Exception as e:
+            self.get_logger().warn(f"Failed to convert RGB message: {e}")
+
+
+    def depth_callback(self, msg: Image):
+        """Store latest depth frame."""
+        try:
+            with self.data_lock:
+                self.depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        except Exception as e:
+            self.get_logger().warn(f"Failed to convert depth message: {e}")
+
+
+    def camera_info_callback(self, msg: CameraInfo):
+        """Extract intrinsics from camera info (called once)."""
+        if self.intrinsics is None:
+            # msg.k is a tuple/list: [fx, 0, cx, 0, fy, cy, 0, 0, 1]
+            K = msg.k  # lowercase 'k'
+            self.intrinsics = {
+                'fx': K[0],
+                'fy': K[4],
+                'ppx': K[2],
+                'ppy': K[5],
+                'width': msg.width,
+                'height': msg.height
+            }
+            self.get_logger().info(
+                f"Camera intrinsics received: fx={self.intrinsics['fx']:.2f}, "
+                f"fy={self.intrinsics['fy']:.2f}, "
+                f"resolution={self.intrinsics['width']}x{self.intrinsics['height']}"
+            )
+
+
     def position_callback(self, msg: Point):
-        """
-        Callback for 3D position detections.
-        
-        Parameters
-        ----------
-        msg : geometry_msgs/Point
-            3D position in camera space (meters)
-        """
-        with self.detection_lock:
+        """Callback for SYBIL 3D position detections."""
+        with self.data_lock:
             self.latest_positions.append({
                 'x': msg.x,
                 'y': msg.y,
                 'z': msg.z
             })
+            self.get_logger().debug(
+                f"[SYBIL] Received 3D position: ({msg.x:.2f}, {msg.y:.2f}, {msg.z:.2f})"
+            )
+
 
     def size_callback(self, msg: Point):
-        """
-        Callback for object size detections.
-        
-        Parameters
-        ----------
-        msg : geometry_msgs/Point
-            Object dimensions (width in x, height in y)
-        """
-        with self.detection_lock:
+        """Callback for SYBIL object size detections."""
+        with self.data_lock:
             self.latest_sizes.append({
                 'width': msg.x,
                 'height': msg.y
             })
 
+
     def visualization_callback(self):
         """
         Callback for visualization timer.
         
-        Captures RGB + depth frames from RealSense, projects 3D detection
-        coordinates onto the 2D image plane, and visualizes them.
+        Projects 3D detection coordinates onto the 2D image plane
+        and visualizes them on the RGB frame.
+        Draws both SYBIL (green) and AprilTag (blue) detections.
         """
         try:
-            # Capture fresh frames from RealSense (with filters applied automatically)
-            rgb, depth = self.camera.get_frames()
-            
-            if rgb is None or depth is None:
-                return
-            
-            # Make a copy to annotate
-            annotated_frame = rgb.copy()
-            
-            # Get latest detections (thread-safe)
-            with self.detection_lock:
-                if not self.latest_positions:
-                    # If no detections, just publish the raw frame
-                    annotated_msg = self.bridge.cv2_to_imgmsg(annotated_frame, encoding='bgr8')
-                    self.annotated_pub.publish(annotated_msg)
-                    if self.display_window:
-                        cv2.imshow("SYBIL Detections", annotated_frame)
-                        cv2.waitKey(1)
+            with self.data_lock:
+                if self.rgb is None or self.intrinsics is None:
                     return
                 
-                # Create a list of positions and sizes for this frame
-                positions = list(self.latest_positions)
-                sizes = list(self.latest_sizes)
-            
-            # Process each detection
-            num_detections = min(len(positions), len(sizes))
-            
-            for i in range(num_detections):
-                pos = positions[i]
-                size = sizes[i]
+                # Make a copy to annotate
+                annotated_frame = self.rgb.copy()
                 
-                # Project 3D position to 2D pixel
+                # Create lists of current detections
+                sybil_positions = list(self.latest_positions)
+                sybil_sizes = list(self.latest_sizes)
+                apriltag_positions = list(self.apriltag_positions)
+            
+            # Draw SYBIL detections (green)
+            num_sybil = min(len(sybil_positions), len(sybil_sizes))
+            for i in range(num_sybil):
+                pos = sybil_positions[i]
+                size = sybil_sizes[i]
+                
                 pixel_coord = self._project_3d_to_2d(pos)
                 
                 if pixel_coord is not None:
-                    # Draw marker and information on frame
-                    self._draw_detection_marker(annotated_frame, pixel_coord, pos, size, i)
+                    self._draw_detection_marker(
+                        annotated_frame, pixel_coord, pos, size, i,
+                        label_prefix="SYBIL", color=(0, 255, 0)  # Green
+                    )
+            
+            # Draw AprilTag detections (blue)
+            for i, pos in enumerate(apriltag_positions):
+                pixel_coord = self._project_3d_to_2d(pos)
+                
+                if pixel_coord is not None:
+                    # No size for AprilTag, so use dummy size
+                    dummy_size = {'width': 0, 'height': 0}
+                    self._draw_detection_marker(
+                        annotated_frame, pixel_coord, pos, dummy_size, i,
+                        label_prefix="AprilTag", color=(255, 0, 0)  # Blue
+                    )
             
             # Publish annotated frame
             annotated_msg = self.bridge.cv2_to_imgmsg(annotated_frame, encoding='bgr8')
@@ -202,19 +248,21 @@ class CameraNode(Node):
             
             # Display frame if enabled
             if self.display_window:
-                cv2.imshow("SYBIL Detections", annotated_frame)
+                cv2.imshow("SYBIL & AprilTag Detections", annotated_frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
-                    pass  # Can implement graceful shutdown
+                    pass
 
         except Exception as e:
             self.get_logger().error(f"Error in visualization callback: {e}")
+
+
 
     def _project_3d_to_2d(self, pos_3d: dict) -> tuple:
         """
         Projects a 3D point in camera space to 2D pixel coordinates.
         
-        Uses RealSense's rs2_project_point_to_pixel function to map the
-        3D detection position back onto the 2D image plane.
+        Uses camera intrinsics to map the 3D detection position
+        back onto the 2D image plane.
         
         Parameters
         ----------
@@ -227,17 +275,23 @@ class CameraNode(Node):
             2D pixel coordinates if projection is valid, None otherwise
         """
         try:
+            if self.intrinsics is None:
+                return None
+            
             # Extract 3D point
-            point_3d = [pos_3d['x'], pos_3d['y'], pos_3d['z']]
+            x, y, z = pos_3d['x'], pos_3d['y'], pos_3d['z']
             
-            # Project to 2D using RealSense intrinsics
-            pixel_2d = rs.rs2_project_point_to_pixel(self.intrinsics, point_3d)
+            # Avoid division by zero
+            if z <= 0:
+                return None
             
-            # Unpack pixel coordinates
-            u, v = pixel_2d[0], pixel_2d[1]
+            # Project using intrinsics: u = fx * x/z + ppx, v = fy * y/z + ppy
+            u = (self.intrinsics['fx'] * x / z) + self.intrinsics['ppx']
+            v = (self.intrinsics['fy'] * y / z) + self.intrinsics['ppy']
             
             # Check if pixel is within frame bounds
-            if 0 <= u < self.intrinsics.width and 0 <= v < self.intrinsics.height:
+            if (0 <= u < self.intrinsics['width'] and 
+                0 <= v < self.intrinsics['height']):
                 return (int(u), int(v))
             else:
                 return None
@@ -246,14 +300,16 @@ class CameraNode(Node):
             self.get_logger().debug(f"Error projecting 3D to 2D: {e}")
             return None
 
+
     def _draw_detection_marker(
         self,
         frame: np.ndarray,
         pixel_coord: tuple,
         pos_3d: dict,
         size: dict,
-        detection_id: int
-    ):
+        detection_id: int,
+        label_prefix: str = "Detection",
+        color: tuple = None):
         """
         Draws a detection marker and annotation on the frame.
         
@@ -269,27 +325,37 @@ class CameraNode(Node):
             Object size with 'width', 'height' (meters)
         detection_id : int
             Index of this detection
+        label_prefix : str
+            Prefix for the label (e.g., "SYBIL", "AprilTag")
+        color : tuple
+            BGR color tuple (use instance marker_color if None)
         """
+        if color is None:
+            color = self.marker_color
+            
         x_pixel, y_pixel = pixel_coord
         
         # Draw a circle at the detection location
-        cv2.circle(frame, (x_pixel, y_pixel), self.marker_size, self.marker_color, -1)
+        cv2.circle(frame, (x_pixel, y_pixel), self.marker_size, color, -1)
         
         # Draw a crosshair
         crosshair_size = self.marker_size + 5
         cv2.line(frame, (x_pixel - crosshair_size, y_pixel), 
-                 (x_pixel + crosshair_size, y_pixel), self.marker_color, 1)
+                (x_pixel + crosshair_size, y_pixel), color, 1)
         cv2.line(frame, (x_pixel, y_pixel - crosshair_size), 
-                 (x_pixel, y_pixel + crosshair_size), self.marker_color, 1)
+                (x_pixel, y_pixel + crosshair_size), color, 1)
         
         # Create annotation text
         text_lines = [
-            f"ID: {detection_id + 1}",
+            f"{label_prefix} ID: {detection_id + 1}",
             f"Pos: ({pos_3d['x']:.2f}, {pos_3d['y']:.2f}, {pos_3d['z']:.2f}m)",
-            f"Size: {size['width']:.2f}x{size['height']:.2f}m"
         ]
         
-        # Draw text above the marker (with background for readability)
+        # Only add size if it's non-zero (SYBIL has size, AprilTag doesn't)
+        if size['width'] > 0 and size['height'] > 0:
+            text_lines.append(f"Size: {size['width']:.2f}x{size['height']:.2f}m")
+        
+        # Draw text above the marker
         text_x = x_pixel + self.marker_size + 10
         text_y = y_pixel - (len(text_lines) * 15)
         
@@ -317,21 +383,18 @@ class CameraNode(Node):
                 (text_x, y_pos),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.4,
-                (0, 255, 0),
+                color,
                 1
             )
+
+
 
     def destroy_node(self):
         """Cleanup when node is shut down."""
         self.get_logger().info("Shutting down camera visualization node...")
-        try:
-            self.camera.stop()
-            self.get_logger().info("RealSense camera stopped")
-        except Exception as e:
-            self.get_logger().error(f"Error stopping camera: {e}")
-        
         cv2.destroyAllWindows()
         super().destroy_node()
+
 
 
 def main(args=None):
@@ -347,6 +410,7 @@ def main(args=None):
         print(f"Error starting camera node: {e}")
     finally:
         rclpy.shutdown()
+
 
 
 if __name__ == '__main__':
