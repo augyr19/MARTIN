@@ -37,10 +37,11 @@ log/
 
 # Legacy code
 NOT_USEFUL_CODE/
+LEGACY/
 
 # Not ready for production
 DRONE/
-EDGE/
+
 
 
 

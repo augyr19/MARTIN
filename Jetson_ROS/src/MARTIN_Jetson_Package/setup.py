@@ -68,6 +68,8 @@ setup(
             'april_tag_node = MARTIN_Jetson_Package.scripts.AprilTag_node:main',
             'sybil_node = MARTIN_Jetson_Package.scripts.SYBIL_node:main',
             'camera_node = MARTIN_Jetson_Package.scripts.camera_node:main',
+            # EDGE ADDITION
+            'edge_node = MARTIN_Jetson_Package.EDGE_node:main',
         ],
     },
 )

@@ -3,6 +3,8 @@ from rclpy.node import Node
 from geometry_msgs.msg import Point
 from sensor_msgs.msg import Image, CameraInfo
 from cv_bridge import CvBridge
+from geometry_msgs.msg import PoseArray
+import math
 
 
 import cv2
@@ -112,6 +114,18 @@ class CameraNode(Node):
             '/sybil/annotated_frame',
             10
         )
+
+
+        # EDGE ADDITION
+        self.edge_lines = deque(maxlen=5)
+
+        self.edge_sub = self.create_subscription(
+            PoseArray,
+            "/edge/lines_3d",
+            self.edge_callback,
+            10
+        )
+
         
         # Timer for visualization
         timer_period = 1.0 / viz_rate
@@ -151,6 +165,12 @@ class CameraNode(Node):
                 self.depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
         except Exception as e:
             self.get_logger().warn(f"Failed to convert depth message: {e}")
+
+    # EDGE ADDITION
+    def edge_callback(self, msg: PoseArray):
+        with self.data_lock:
+            self.edge_lines.append(msg)
+
 
 
     def camera_info_callback(self, msg: CameraInfo):
@@ -241,6 +261,31 @@ class CameraNode(Node):
                         annotated_frame, pixel_coord, pos, dummy_size, i,
                         label_prefix="AprilTag", color=(255, 0, 0)  # Blue
                     )
+            
+            # EDGE ADDITION
+            with self.data_lock:
+                edge_msgs = list(self.edge_lines)
+
+            for msg in edge_msgs[-1:]:  # only newest frame
+                current_poly = []
+                for pose in msg.poses:
+                    x, y, z = pose.position.x, pose.position.y, pose.position.z
+
+                    # NaN separator => draw current polyline then reset
+                    if not math.isfinite(x) or not math.isfinite(y) or not math.isfinite(z):
+                        if len(current_poly) >= 2:
+                            cv2.polylines(annotated_frame, [np.array(current_poly, np.int32)], False, (0, 165, 255), 2)
+                        current_poly = []
+                        continue
+
+                    pixel = self._project_3d_to_2d({'x': x, 'y': y, 'z': z})
+                    if pixel is not None:
+                        current_poly.append(pixel)
+
+                # last poly
+                if len(current_poly) >= 2:
+                    cv2.polylines(annotated_frame, [np.array(current_poly, np.int32)], False, (0, 165, 255), 2)
+
             
             # Publish annotated frame
             annotated_msg = self.bridge.cv2_to_imgmsg(annotated_frame, encoding='bgr8')

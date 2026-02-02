@@ -49,4 +49,6 @@ Email: ullmannb@tamu.edu
 __all__ = [
     'SYBIL_node',
     'camera_node',
+    'EDGE_node',
+    'AprilTag_node',
 ]
