@@ -41,6 +41,7 @@ LEGACY/
 
 # Not ready for production
 DRONE/
+moveit_arm/
 
 
 
